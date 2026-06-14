@@ -1,0 +1,15 @@
+{
+  "extends": "@michijs/tsconfig/tsconfig.json",
+  "compilerOptions": {
+    "outDir": "temp",
+    "baseUrl": "./src"
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "build"
+  ]
+}

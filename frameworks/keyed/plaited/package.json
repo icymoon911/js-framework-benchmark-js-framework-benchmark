@@ -1,0 +1,25 @@
+{
+  "scripts": {
+    "dev": "esbuild src/main.tsx --bundle --outfile=dist/main.js --watch",
+    "build-prod": "esbuild src/main.tsx --bundle --outfile=dist/main.js --minify"
+  },
+  "type": "module",
+  "dependencies": {
+    "plaited": "7.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.2"
+  },
+  "js-framework-benchmark": {
+    "frameworkVersionFromPackage": "plaited",
+    "frameworkHomeURL": "https://github.com/plaited/plaited",
+    "useShadowRoot": true,
+    "shadowRootName": "js-benchmark",
+    "buttonsInShadowRoot": true,
+    "issues": [
+      800,
+      772
+    ],
+    "language": "TypeScript"
+  }
+}

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Dioxus</title>
+    <link href="/css/currentStyle.css" rel="stylesheet">
+    <script
+        type="module">import init from '/frameworks/keyed/dioxus/bundled-dist/dioxus_benchmark.js'; init('/frameworks/keyed/dioxus/bundled-dist/dioxus_benchmark_bg.wasm');</script>
+
+    <link rel="preload" href="/frameworks/keyed/dioxus/bundled-dist/dioxus_benchmark_bg.wasm" as="fetch"
+        type="application/wasm" crossorigin="">
+    <link rel="modulepreload" href="/frameworks/keyed/dioxus/bundled-dist/dioxus_benchmark.js">
+<link rel="modulepreload" href="/dioxus_benchmark-32c73e936749f4d4.js" crossorigin="anonymous" integrity="sha384-l5JLzgIadXVGROrSodTemU4jcnCJ0UUzQiO48J9K6ViDgnLAu5IpdwUKfmkEjw5Q"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-ce7056f341163470/src/js/patch_console.js" crossorigin="anonymous" integrity="sha384-r+5veWcnM6yFNXixia5X8SIr1KdMZfaSc4dp0/8fqFpt3s6gK4zUXXSkvHdZ4TmG"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-ce7056f341163470/inline0.js" crossorigin="anonymous" integrity="sha384-j0LKwUivj+3TJqebf9mBv6v1Yu2sX+LAJanOVfQAVOZpWTU0+pzzo8XExJBFDUso"><link rel="modulepreload" href="/snippets/dioxus-web-fe956e4b19891335/inline0.js" crossorigin="anonymous" integrity="sha384-2v8X0XAeO26J0vmoLhIbIeAjVzFnrY9iLhlYJcksTMp7Ip2tbDcoX4vD/hCan7M7"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-ce7056f341163470/src/js/set_attribute.js" crossorigin="anonymous" integrity="sha384-KzHUe16NLJR2eaeVyqeB7zwb1qHGH3sV/aw0aS7V/+IeQwWH6OAnZ9nbGkwEyGzZ"><link rel="modulepreload" href="/snippets/dioxus-interpreter-js-ce7056f341163470/src/js/hydrate.js" crossorigin="anonymous" integrity="sha384-Ocp9HYCb7T7M2KNri/Y2CHx/JgjlahEvu2KUTc/YKyGLB0s0pgNeCaanjX7egjMz"><link rel="modulepreload" href="/snippets/dioxus-cli-config-c2775606adf80e62/inline0.js" crossorigin="anonymous" integrity="sha384-63GOaGGIhEHCB9m4vzzYEBfUIIUWiAYuNlk/LB2TuDDcjK13LO2II01K9xxO0fFG"><link rel="preload" href="/dioxus_benchmark-32c73e936749f4d4_bg.wasm" crossorigin="anonymous" integrity="sha384-9/MfPbddLL5EYyLM0pFQsY2h3+EuHp2SsDv2Ja0F+F31yQ7EbT/sfCNBwktu1Jok" as="fetch" type="application/wasm"></head>
+
+<body>
+    <div id="main"></div>
+
+    <script src="/frameworks/keyed/dioxus/isKeyed.js"></script>
+
+
+
+<script type="module">
+import init, * as bindings from '/dioxus_benchmark-32c73e936749f4d4.js';
+const wasm = await init({ module_or_path: '/dioxus_benchmark-32c73e936749f4d4_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+
+</html>

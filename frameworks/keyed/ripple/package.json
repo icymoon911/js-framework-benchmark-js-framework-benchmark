@@ -1,0 +1,34 @@
+{
+  "name": "js-framework-benchmark-ripple",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Boilerplate for Ripple",
+  "js-framework-benchmark": {
+    "frameworkVersionFromPackage": "ripple",
+    "frameworkHomeURL": "https://ripple-ts.com/",
+    "language": "JavaScript"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build-prod": "vite build"
+  },
+  "keywords": [
+    "ripple",
+    "tsrx"
+  ],
+  "author": "Stefan Krause",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/krausest/js-framework-benchmark",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/krausest/js-framework-benchmark.git"
+  },
+  "dependencies": {
+    "ripple": "0.3.65"
+  },
+  "devDependencies": {
+    "@ripple-ts/vite-plugin": "0.3.65",
+    "terser": "^5.46.1",
+    "vite": "^8.0.14"
+  }
+}

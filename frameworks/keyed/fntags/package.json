@@ -1,0 +1,27 @@
+{
+  "name": "js-framework-benchmark-fntags",
+  "version": "0.0.1",
+  "description": "fntags demo",
+  "main": "index.js",
+  "js-framework-benchmark": {
+    "frameworkVersionFromPackage": "@srfnstack/fntags",
+    "frameworkHomeURL": "https://srfnstack.github.io/fntags/",
+    "language": "JavaScript"
+  },
+  "scripts": {
+    "dev": "npm i && DEV=true rollup -c",
+    "build-prod": "npm i && rollup -c"
+  },
+  "author": "Robert Kempton",
+  "dependencies": {
+    "@srfnstack/fntags": "1.1.0"
+  },
+  "devDependencies": {
+    "fs-extra": "11.2.0",
+    "terser": "5.37.0",
+    "rimraf": "^6.1.2",
+    "rollup": "^4.54.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^0.4.4"
+  }
+}

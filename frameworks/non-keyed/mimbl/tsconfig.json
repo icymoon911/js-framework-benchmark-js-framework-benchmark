@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		//"declaration": true,
+		"outDir": "./dist/",
+		"sourceMap": true,
+		"noImplicitAny": false,
+		"strictNullChecks": false,
+		"module": "esnext",
+        "moduleResolution": "node",
+		"target": "esnext",
+		"lib": [ "esnext", "dom" ],
+		"experimentalDecorators": true,
+		"preserveConstEnums": false,
+        "useDefineForClassFields": false,
+		"jsx": "react",
+		"jsxFactory": "mim.jsx",
+        "types": []
+	},
+
+	"include": [
+		"./src/**/*"
+	]
+}
