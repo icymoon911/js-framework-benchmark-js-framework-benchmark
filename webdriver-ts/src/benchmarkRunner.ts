@@ -25,6 +25,14 @@ import { StartupBenchmarkResult } from "./benchmarksLighthouse.js";
 import { writeResults } from "./writeResults.js";
 import { PlausibilityCheck } from "./timeline.js";
 import { SizeBenchmarkResult } from "./benchmarksSize.js";
+import {
+  detectRegressions,
+  compareResults,
+  loadResultsFromDirectory,
+  writeRegressionReport,
+  printRegressionSummary,
+  readIgnoreList,
+} from "./regressionDetection.js";
 
 function forkAndCallBenchmark(
   framework: FrameworkData,
@@ -297,7 +305,9 @@ async function main() {
     .array("benchmark")
     .number("count")
     .number("puppeteerSleep")
-    .string("chromeBinary").argv;
+    .string("chromeBinary")
+    .string("baseline")
+    .argv;
 
   console.log("args", args);
 
@@ -406,7 +416,37 @@ async function main() {
   if (args.help) {
     // yargs.showHelp();
   } else {
-    return runBench(runFrameworks, runBenchmarks, benchmarkOptions);
+    // --- Snapshot baseline BEFORE benchmarks overwrite results ---
+    // If --baseline is specified, load from that directory.
+    // Otherwise, load from the current results directory (existing results from the previous run).
+    const baselineDir = (args.baseline as string | undefined) ?? benchmarkOptions.resultsDirectory;
+    const baselineSnapshot = loadResultsFromDirectory(baselineDir);
+    const hasBaseline = baselineSnapshot.size > 0;
+    if (hasBaseline) {
+      console.log(`Baseline snapshot loaded: ${baselineSnapshot.size} result file(s) from ${baselineDir}`);
+    }
+
+    await runBench(runFrameworks, runBenchmarks, benchmarkOptions);
+
+    // --- Regression Detection ---
+    // Run after all benchmarks are complete and results are written.
+    // This does NOT affect result writing — it only compares and reports.
+    if (hasBaseline) {
+      const currentDir = benchmarkOptions.resultsDirectory;
+      console.log(`\nRunning regression detection...`);
+      const currentResults = loadResultsFromDirectory(currentDir);
+      const ignoreFrameworks = readIgnoreList();
+      const report = compareResults(baselineSnapshot, currentResults, baselineDir, currentDir, ignoreFrameworks);
+      const reportPath = writeRegressionReport(report, currentDir);
+      console.log(`Regression report written to: ${reportPath}`);
+      printRegressionSummary(report);
+
+      if (report.summary.regressions > 0) {
+        throw `Regression detection found ${report.summary.regressions} regression(s). See ${reportPath} for details.`;
+      }
+    } else {
+      console.log("\nNo baseline results found — skipping regression detection.");
+    }
   }
 }
 

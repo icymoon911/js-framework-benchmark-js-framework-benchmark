@@ -42,6 +42,9 @@
   "author": "Stefan Krause",
   "license": "ISC",
   "homepage": "https://github.com/krausest/js-framework-benchmark",
+  "js-framework-benchmark": {
+    "ignoreRegression": []
+  },
   "dependencies": {
     "adm-zip": "^0.5.16",
     "commander": "^14.0.3",
