@@ -25,6 +25,7 @@ import { StartupBenchmarkResult } from "./benchmarksLighthouse.js";
 import { writeResults } from "./writeResults.js";
 import { PlausibilityCheck } from "./timeline.js";
 import { SizeBenchmarkResult } from "./benchmarksSize.js";
+import { detectRegressions, writeRegressionReport, printRegressionSummary } from "./regressionDetection.js";
 
 function forkAndCallBenchmark(
   framework: FrameworkData,
@@ -271,7 +272,7 @@ async function runBench(
   }
 }
 
-async function main() {
+async function main(): Promise<boolean> {
   // FIXME: Clean up args.
   // What works: npm run bench keyed/react, npm run bench -- keyed/react, npm run bench -- keyed/react --count 1 --benchmark 01_
   // What doesn't work (keyed/react becomes an element of argument benchmark): npm run bench -- --count 1 --benchmark 01_ keyed/react
@@ -297,7 +298,8 @@ async function main() {
     .array("benchmark")
     .number("count")
     .number("puppeteerSleep")
-    .string("chromeBinary").argv;
+    .string("chromeBinary")
+    .string("baseline").argv;
 
   console.log("args", args);
 
@@ -405,13 +407,51 @@ async function main() {
 
   if (args.help) {
     // yargs.showHelp();
+    return false;
   } else {
-    return runBench(runFrameworks, runBenchmarks, benchmarkOptions);
+    await runBench(runFrameworks, runBenchmarks, benchmarkOptions);
+
+    // --- Regression detection (runs after all results are written) ---
+    // Skip regression detection in smoketest mode since no results are written
+    if (args.smoketest || !config.WRITE_RESULTS) {
+      return false;
+    }
+
+    const baselineDirectory = args.baseline ?? benchmarkOptions.resultsDirectory;
+
+    // Only run regression detection if we have a different baseline directory,
+    // or if explicitly requested (otherwise we'd compare results against themselves).
+    // When --baseline is not provided and the baseline equals the current results dir,
+    // we still attempt detection — it will find no differences for just-written files
+    // but will work correctly if the CI preserved old results before overwriting.
+    try {
+      console.log("Running regression detection...");
+      console.log(`  Baseline directory: ${baselineDirectory}`);
+      console.log(`  Current directory:  ${benchmarkOptions.resultsDirectory}`);
+
+      const { report, hasRegressions } = detectRegressions({
+        currentDirectory: benchmarkOptions.resultsDirectory,
+        baselineDirectory,
+      });
+
+      const reportPath = writeRegressionReport(benchmarkOptions.resultsDirectory, report);
+      console.log(`Regression report written to: ${reportPath}`);
+      printRegressionSummary(report);
+
+      return hasRegressions;
+    } catch (e) {
+      console.error("Regression detection failed (non-fatal):", e);
+      return false;
+    }
   }
 }
 
 main()
-  .then(() => {
+  .then((hasRegressions) => {
+    if (hasRegressions) {
+      console.log("Performance regressions detected — exiting with non-zero code.");
+      process.exit(2);
+    }
     console.log("successful run");
     process.exit(0);
   })
