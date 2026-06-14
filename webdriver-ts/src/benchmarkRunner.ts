@@ -105,12 +105,18 @@ async function runBenchmakLoopSize(
     done++;
   }
   if (config.WRITE_RESULTS) {
-    await writeResults(benchmarkOptions.resultsDirectory, {
-      framework: framework,
-      benchmark: benchmarkInfo,
-      results: results,
-      type: BenchmarkType.SIZE,
-    });
+    if (results.length === 0) {
+      const errorMsg = `Skipping writeResults for ${framework.uri} benchmark ${benchmarkInfo.id}: results array is empty (all iterations failed)`;
+      console.error(errorMsg);
+      errors.push(errorMsg);
+    } else {
+      await writeResults(benchmarkOptions.resultsDirectory, {
+        framework: framework,
+        benchmark: benchmarkInfo,
+        results: results,
+        type: BenchmarkType.SIZE,
+      });
+    }
   }
   return { errors, warnings };
   // } else {
@@ -160,25 +166,31 @@ async function runBenchmakLoop(
     }
   }
   if (config.WRITE_RESULTS) {
-    try {
-      if (benchmarkInfo.type == BenchmarkType.CPU) {
-        await writeResults(benchmarkOptions.resultsDirectory, {
-          framework: framework,
-          benchmark: benchmarkInfo,
-          results: results as CPUBenchmarkResult[],
-          type: BenchmarkType.CPU,
-        });
-      } else {
-        await writeResults(benchmarkOptions.resultsDirectory, {
-          framework: framework,
-          benchmark: benchmarkInfo,
-          results: results as number[],
-          type: BenchmarkType.MEM,
-        });
-      }      
-    } catch (e) {
-        console.error(e);
-        errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + e);
+    if (results.length === 0) {
+      const errorMsg = `Skipping writeResults for ${framework.uri} benchmark ${benchmarkInfo.id}: results array is empty (all iterations failed)`;
+      console.error(errorMsg);
+      errors.push(errorMsg);
+    } else {
+      try {
+        if (benchmarkInfo.type == BenchmarkType.CPU) {
+          await writeResults(benchmarkOptions.resultsDirectory, {
+            framework: framework,
+            benchmark: benchmarkInfo,
+            results: results as CPUBenchmarkResult[],
+            type: BenchmarkType.CPU,
+          });
+        } else {
+          await writeResults(benchmarkOptions.resultsDirectory, {
+            framework: framework,
+            benchmark: benchmarkInfo,
+            results: results as number[],
+            type: BenchmarkType.MEM,
+          });
+        }
+      } catch (e) {
+          console.error(e);
+          errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + e);
+      }
     }
   }
   return { errors, warnings };
@@ -267,7 +279,7 @@ async function runBench(
     errors.forEach((e) => {
       console.log(e);
     });
-    throw "Benchmarking failed with errors";
+    throw new Error("Benchmarking failed with errors");
   }
 }
 

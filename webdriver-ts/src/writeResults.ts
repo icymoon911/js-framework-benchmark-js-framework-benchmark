@@ -70,6 +70,17 @@ function createResultFile(
   framework: FrameworkData,
   benchmark: BenchmarkInfo
 ) {
+  if (Array.isArray(data) && data.length === 0) {
+    console.error(`Skipping createResultFile for ${framework.fullNameWithKeyedAndVersion} benchmark ${benchmark.id}: data array is empty`);
+    return;
+  }
+  if (!Array.isArray(data)) {
+    const allEmpty = Object.values(data).every((arr) => arr.length === 0);
+    if (allEmpty) {
+      console.error(`Skipping createResultFile for ${framework.fullNameWithKeyedAndVersion} benchmark ${benchmark.id}: all data arrays are empty`);
+      return;
+    }
+  }
   let type = "";
   switch (benchmark.type) {
     case BenchmarkType.CPU:
