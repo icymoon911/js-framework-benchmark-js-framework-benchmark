@@ -104,7 +104,11 @@ async function runBenchmakLoopSize(
     }
     done++;
   }
-  if (config.WRITE_RESULTS) {
+  if (results.length === 0) {
+    let msg = `Skipping writeResults for ${framework.uri} benchmark ${benchmarkInfo.id}: results array is empty (all iterations failed)`;
+    console.error(msg);
+    errors.push(msg);
+  } else if (config.WRITE_RESULTS) {
     await writeResults(benchmarkOptions.resultsDirectory, {
       framework: framework,
       benchmark: benchmarkInfo,
@@ -159,7 +163,11 @@ async function runBenchmakLoop(
       break;
     }
   }
-  if (config.WRITE_RESULTS) {
+  if (results.length === 0) {
+    let msg = `Skipping writeResults for ${framework.uri} benchmark ${benchmarkInfo.id}: results array is empty (all iterations failed)`;
+    console.error(msg);
+    errors.push(msg);
+  } else if (config.WRITE_RESULTS) {
     try {
       if (benchmarkInfo.type == BenchmarkType.CPU) {
         await writeResults(benchmarkOptions.resultsDirectory, {
@@ -175,7 +183,7 @@ async function runBenchmakLoop(
           results: results as number[],
           type: BenchmarkType.MEM,
         });
-      }      
+      }
     } catch (e) {
         console.error(e);
         errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + e);
@@ -267,7 +275,7 @@ async function runBench(
     errors.forEach((e) => {
       console.log(e);
     });
-    throw "Benchmarking failed with errors";
+    throw new Error("Benchmarking failed with errors");
   }
 }
 

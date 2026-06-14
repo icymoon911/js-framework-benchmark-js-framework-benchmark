@@ -91,6 +91,10 @@ function createResultFile(
     return res;
   };
   if (Array.isArray(data)) {
+    if ((data as number[]).length === 0) {
+      console.error(`Skipping result file for ${framework.fullNameWithKeyedAndVersion} ${benchmark.id}: data array is empty`);
+      return;
+    }
     let result: JsonResult = {
       framework: framework.fullNameWithKeyedAndVersion,
       keyed: framework.keyed,
@@ -102,6 +106,11 @@ function createResultFile(
       encoding: "utf8",
     });
   } else {
+    let allEmpty = Object.keys(data).every((key) => (data as any)[key].length === 0);
+    if (allEmpty) {
+      console.error(`Skipping result file for ${framework.fullNameWithKeyedAndVersion} ${benchmark.id}: all data arrays are empty`);
+      return;
+    }
     let values: { [k: string]: JsonResultData } = {};
     for (let key of Object.keys(data)) {
       values[key] = convertResult(key, data[key]);

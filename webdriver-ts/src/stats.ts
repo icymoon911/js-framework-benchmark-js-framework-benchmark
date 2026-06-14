@@ -13,7 +13,9 @@ export function stats(values: number[]) {
 
   let mean = sorted.reduce((p, c) => p + c, 0) / sorted.length;
 
-  let variance = sorted.reduce((p, c) => p + Math.pow(c - mean, 2), 0) / (sorted.length - 1);
+  let variance = sorted.length > 1
+    ? sorted.reduce((p, c) => p + Math.pow(c - mean, 2), 0) / (sorted.length - 1)
+    : 0;
   let stddev = Math.sqrt(variance);
 
   return {

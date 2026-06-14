@@ -44,4 +44,18 @@ describe("stats", () => {
     expect(s.stddev).toBeCloseTo(6.476795230246634, 8);
     expect(s.median).toBe(978.866);
   });
+
+  test("works correctly for single element", () => {
+    let values = [42];
+    let s = stats(values);
+    expect(s.min).toBe(42);
+    expect(s.max).toBe(42);
+    expect(s.mean).toBe(42);
+    expect(s.stddev).toBe(0);
+    expect(s.median).toBe(42);
+  });
+
+  test("throws for empty array", () => {
+    expect(() => stats([])).toThrow("Cannot compute stats on empty array");
+  });
 });

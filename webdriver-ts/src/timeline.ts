@@ -4,6 +4,7 @@ import * as R from "ramda";
 import { BenchmarkType, CPUBenchmarkInfo, CPUBenchmarkResult } from "./benchmarksCommon.js";
 import { BenchmarkOptions, FrameworkData, Config, config } from "./common.js";
 import { writeResults } from "./writeResults.js";
+import { Interval, newContainedInterval } from "./interval.js";
 
 interface TimingResult {
   type: string;
@@ -171,7 +172,7 @@ export async function computeResultsCPU(
       console.log("one mousedown event", fileName);
     } else if (mousedowns.length > 1) {
       console.log("more than one mousedown event", fileName, events);
-      throw "at most one mousedown event is expected";
+      throw new Error("at most one mousedown event is expected");
     }
 
   // Find click event. This is the start of the benchmark. We're using the synthetic "startLogicEvent" event we've created above
@@ -179,7 +180,7 @@ export async function computeResultsCPU(
   // Invariant: There must be exactly one click event
   if (clicks.length !== 1) {
     console.log("exactly one click event is expected", fileName, events);
-    throw "exactly one click event is expected";
+    throw new Error("exactly one click event is expected");
   }
   let click = clicks[0];
 
@@ -222,7 +223,7 @@ export async function computeResultsCPU(
   // we're looking for the commit after this event
   let startFromEvent = startFrom.at(-1);
   if (startFromEvent === undefined) {
-    throw "unexpected situation. There must be some events, but there were none."
+    throw new Error("unexpected situation. There must be some events, but there were none.");
   }
   if (config.LOG_DETAILS) console.log("DEBUG: searching for commit event after", startFromEvent, "for", fileName);
   let commit = R.find((e: TimingResult) => e.ts > startFromEvent.end)(R.filter(type_eq("commit"))(eventsOnMainThreadDuringBenchmark));
@@ -233,14 +234,14 @@ export async function computeResultsCPU(
     console.log("INFO: No commit event found according to filter", fileName);
     if (allCommitsAfterClick.length === 0) {
       console.log("ERROR: No commit event found for", fileName);
-      throw "No commit event found for " + fileName;
+      throw new Error("No commit event found for " + fileName);
     } else {
       commit = allCommitsAfterClick.at(-1);
     }
   }
   let lastCommit = allCommitsAfterClick.at(-1);
   if (lastCommit === undefined || commit === undefined) {
-    throw "unexpected situation. allCommitsAfterClick and  commit must not be empty";
+    throw new Error("unexpected situation. allCommitsAfterClick and  commit must not be empty");
   }  
   let maxDeltaBetweenCommits = (lastCommit.ts - allCommitsAfterClick[0].ts)/1000.0;
 
@@ -279,7 +280,7 @@ export async function computeResultsCPU(
         console.log("IGNORING delay < 16 msecs 1 raf, 1 faf", waitDelay, fileName);
       }
     } else if (fafs.length == 1) {
-      throw (
+      throw new Error(
         "Unexpected situation. Did not happen in the past. One fire animation frame, but non consistent request animation frames in " +
         fileName
       );
@@ -364,32 +365,6 @@ export class PlausibilityCheck {
   }
 }
 
-interface Interval {
-  start: number;
-  end: number;
-  timingResult: TimingResult;
-}
-
-function isContained(testIv: Interval, otherIv: Interval) {
-  return testIv.start >= otherIv.start && testIv.end <= otherIv.end;
-}
-
-function newContainedInterval(outer: TimingResult, intervals: Array<Interval>) {
-  let outerIv = { start: outer.ts, end: outer.end, timingResult: outer };
-  let cleanedUp: Array<Interval> = [];
-  let isContainedRes = intervals.some((iv) => isContained(outerIv, iv));
-  if (!isContainedRes) {
-    cleanedUp.push(outerIv);
-  }
-
-  for (let iv of intervals) {
-    if (iv.start < outer.ts || iv.end > outer.end) {
-      cleanedUp.push(iv);
-    }
-  }            
-  return cleanedUp;
-}
-
 export function computeResultsJS(
   cpuTrace: CPUDurationResult,
   config: Config,
@@ -426,9 +401,9 @@ export async function computeResultsFromTrace(
     ev.end -= totalDuration.tsStart;
   }
     
-  let intervals: Array<Interval> = [];
+  let intervals: Array<Interval<TimingResult>> = [];
   for (let ev of eventsWithin) {
-    intervals = newContainedInterval(ev, intervals);
+    intervals = newContainedInterval({ start: ev.ts, end: ev.end, timingResult: ev }, intervals);
   }
   if (config.LOG_DETAILS) {
     if (intervals.length > 1) {
