@@ -60,9 +60,30 @@ export enum BenchmarkRunner {
   WEBDRIVER_AFTERFRAME = "webdriver-afterframe",
 }
 
-export let config = {
+export interface Config {
+  readonly NUM_ITERATIONS_FOR_BENCHMARK_CPU: number;
+  readonly NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: number;
+  readonly NUM_ITERATIONS_FOR_BENCHMARK_MEM: number;
+  readonly NUM_ITERATIONS_FOR_BENCHMARK_STARTUP: number;
+  readonly NUM_ITERATIONS_FOR_BENCHMARK_SIZE: number;
+  readonly TIMEOUT: number;
+  readonly LOG_PROGRESS: boolean;
+  readonly LOG_DETAILS: boolean;
+  readonly LOG_DEBUG: boolean;
+  readonly LOG_TIMELINE: boolean;
+  readonly EXIT_ON_ERROR: boolean;
+  readonly STARTUP_DURATION_FROM_EVENTLOG: boolean;
+  readonly STARTUP_SLEEP_DURATION: number;
+  readonly WRITE_RESULTS: boolean;
+  readonly ALLOW_BATCHING: boolean;
+  readonly BENCHMARK_RUNNER: BenchmarkRunner;
+  readonly PUPPETEER_WAIT_MS: number;
+}
+
+/** Default config values. */
+const defaultConfigValues = {
   NUM_ITERATIONS_FOR_BENCHMARK_CPU: 15,
-  NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: 0, // drop the # of slowest results
+  NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: 0,
   NUM_ITERATIONS_FOR_BENCHMARK_MEM: 1,
   NUM_ITERATIONS_FOR_BENCHMARK_STARTUP: 1,
   NUM_ITERATIONS_FOR_BENCHMARK_SIZE: 1,
@@ -71,15 +92,30 @@ export let config = {
   LOG_DETAILS: false,
   LOG_DEBUG: false,
   LOG_TIMELINE: false,
-  EXIT_ON_ERROR: false, // set from command line
+  EXIT_ON_ERROR: false,
   STARTUP_DURATION_FROM_EVENTLOG: true,
   STARTUP_SLEEP_DURATION: 1000,
   WRITE_RESULTS: true,
   ALLOW_BATCHING: true,
   BENCHMARK_RUNNER: BenchmarkRunner.PUPPETEER,
   PUPPETEER_WAIT_MS: 0,
-};
-export type Config = typeof config;
+} as const;
+
+/**
+ * Create a frozen, immutable Config object.
+ * Pass partial overrides to customize.
+ */
+export function createConfig(overrides: Partial<Config> = {}): Readonly<Config> {
+  const merged = { ...defaultConfigValues, ...overrides };
+  return Object.freeze(merged);
+}
+
+/**
+ * A default config instance for backward compatibility.
+ * Modules that need config before the main process creates one
+ * can import this (e.g. webdriverAccess, parseTrace, etc.).
+ */
+export const config: Readonly<Config> = createConfig();
 
 export interface FrameworkData {
   name: string;
@@ -137,7 +173,8 @@ async function fetchFrameworks(url: string) {
 
 export async function initializeFrameworks(
   benchmarkOptions: BenchmarkOptions,
-  matchPredicate: MatchPredicate = matchAll
+  matchPredicate: MatchPredicate = matchAll,
+  cfg: Readonly<Config> = config
 ): Promise<FrameworkData[]> {
   let lsResult;
   const lsUrl = `http://${benchmarkOptions.host}:${benchmarkOptions.port}/ls`;
@@ -172,7 +209,7 @@ export async function initializeFrameworks(
       });
     }
   }
-  if (config.LOG_DETAILS) {
+  if (cfg.LOG_DETAILS) {
     console.log("All available frameworks: ");
     console.log(frameworks.map((fd) => fd.fullNameWithKeyedAndVersion));
   }
@@ -184,4 +221,3 @@ export const wait = (delay = 1000) => {
   if (delay === 0) return Promise.resolve();
   else return new Promise((res) => setTimeout(res, delay));
 };
-

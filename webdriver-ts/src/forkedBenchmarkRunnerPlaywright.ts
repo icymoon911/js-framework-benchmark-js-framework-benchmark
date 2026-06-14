@@ -6,58 +6,35 @@ import {
   MemBenchmarkPlaywright,
   BenchmarkPlaywright,
 } from "./benchmarksPlaywright.js";
-import { BenchmarkOptions, config as defaultConfig, ErrorAndWarning, FrameworkData, Config } from "./common.js";
+import { BenchmarkOptions, Config, ErrorAndWarning, FrameworkData } from "./common.js";
 import { startBrowser } from "./playwrightAccess.js";
-import { computeResultsCPU, computeResultsJS, computeResultsPaint, fileNameTrace } from "./timeline.js";
+import { computeResultsCPU } from "./cpuDuration.js";
+import { computeResultsJS, computeResultsPaint } from "./traceDuration.js";
+import { fileNameTrace } from "./timeline.js";
+import { convertError, setupForkedRunner } from "./forkedRunnerCommon.js";
 
-let config: Config = defaultConfig;
+const wait = (delay = 1000) => new Promise((res) => setTimeout(res, delay));
 
 async function runBenchmark(
   browser: Browser,
   page: Page,
   benchmark: BenchmarkPlaywright,
-  framework: FrameworkData
-): Promise<any> {
+  framework: FrameworkData,
+  cfg: Readonly<Config>
+): Promise<void> {
   await benchmark.run(browser, page, framework);
-  if (config.LOG_PROGRESS) console.log("after run", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
+  if (cfg.LOG_PROGRESS) console.log("after run", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
 }
 
 async function initBenchmark(
   browser: Browser,
   page: Page,
   benchmark: BenchmarkPlaywright,
-  framework: FrameworkData
-): Promise<any> {
+  framework: FrameworkData,
+  cfg: Readonly<Config>
+): Promise<void> {
   await benchmark.init(browser, page, framework);
-  if (config.LOG_PROGRESS) console.log("after initialized", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
-  // if (benchmark.type === BenchmarkType.MEM) {
-  //   await forceGC(page);
-  // }
-}
-
-const wait = (delay = 1000) => new Promise((res) => setTimeout(res, delay));
-
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
+  if (cfg.LOG_PROGRESS) console.log("after initialized", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
 }
 
 async function forceGC(page: Page) {
@@ -67,7 +44,8 @@ async function forceGC(page: Page) {
 async function runCPUBenchmark(
   framework: FrameworkData,
   benchmark: CPUBenchmarkPlaywright,
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<ErrorAndWarning<CPUBenchmarkResult>> {
   let error: string | undefined = undefined;
   let warnings: string[] = [];
@@ -79,19 +57,16 @@ async function runCPUBenchmark(
     browser = await startBrowser(benchmarkOptions);
     for (let i = 0; i < benchmarkOptions.batchSize; i++) {
       let page = await browser.newPage();
-      // if (config.LOG_DETAILS) {
       page.on("console", (msg) => {
         for (let i = 0; i < msg.args().length; ++i) console.log(`BROWSER: ${msg.args()[i]}`);
       });
-      // }
       let client = await page.context().newCDPSession(page);
-      // await client.send("Performance.enable");
       await page.goto(`http://${benchmarkOptions.host}:${benchmarkOptions.port}/${framework.uri}/index.html`, {
         waitUntil: "networkidle",
       });
 
       console.log("initBenchmark Playwright");
-      await initBenchmark(browser, page, benchmark, framework);
+      await initBenchmark(browser, page, benchmark, framework, cfg);
       let categories = ["blink.user_timing", "devtools.timeline", "disabled-by-default-devtools.timeline"];
 
       await forceGC(page);
@@ -106,22 +81,22 @@ async function runCPUBenchmark(
         screenshots: false,
         categories: categories,
       });
-      await runBenchmark(browser, page, benchmark, framework);
+      await runBenchmark(browser, page, benchmark, framework, cfg);
 
       await wait(40);
       await browser.stopTracing();
       if (throttleCPU) {
         await client.send("Emulation.setCPUThrottlingRate", { rate: 1 });
       }
-      let result = await computeResultsCPU(fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions), framework.startLogicEventName);
+      let result = await computeResultsCPU(fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions), framework.startLogicEventName, cfg);
       let resultScript = await computeResultsJS(
         result,
-        config,
+        cfg,
         fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions)
       );
       let resultPaint = await computeResultsPaint(
         result,
-        config,
+        cfg,
         fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions)
       );
 
@@ -155,7 +130,8 @@ async function runCPUBenchmark(
 async function runMemBenchmark(
   framework: FrameworkData,
   benchmark: MemBenchmarkPlaywright,
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<ErrorAndWarning<number>> {
   let error: string | undefined = undefined;
   let warnings: string[] = [];
@@ -167,7 +143,7 @@ async function runMemBenchmark(
     browser = await startBrowser(benchmarkOptions);
     const page = await browser.newPage();
     for (let i = 0; i < benchmarkOptions.batchSize; i++) {
-      if (config.LOG_DETAILS) {
+      if (cfg.LOG_DETAILS) {
         page.on("console", (msg) => {
           for (let i = 0; i < msg.args().length; ++i) console.log(`BROWSER: ${msg.args()[i]}`);
         });
@@ -177,23 +153,15 @@ async function runMemBenchmark(
         waitUntil: "networkidle",
       });
 
-      // await (driver as any).sendDevToolsCommand('Network.enable');
-      // await (driver as any).sendDevToolsCommand('Network.emulateNetworkConditions', {
-      //     offline: false,
-      //     latency: 200, // ms
-      //     downloadThroughput: 780 * 1024 / 8, // 780 kb/s
-      //     uploadThroughput: 330 * 1024 / 8, // 330 kb/s
-      // });
       console.log("initBenchmark");
       let client = await page.context().newCDPSession(page);
       await client.send("Performance.enable");
-      await initBenchmark(browser, page, benchmark, framework);
+      await initBenchmark(browser, page, benchmark, framework, cfg);
 
       console.log("runBenchmark");
-      await runBenchmark(browser, page, benchmark, framework);
+      await runBenchmark(browser, page, benchmark, framework, cfg);
       await forceGC(page);
       await wait(40);
-      // let result = (await client.send('Performance.getMetrics')).metrics.filter((m) => m.name==='JSHeapUsedSize')[0].value / 1024 / 1024;
 
       let result = ((await page.evaluate("performance.measureUserAgentSpecificMemory()")) as any).bytes / 1024 / 1024;
       console.log("afterBenchmark ");
@@ -217,10 +185,11 @@ async function runMemBenchmark(
   }
 }
 
-export async function executeBenchmark(
+async function executeBenchmark(
   framework: FrameworkData,
   benchmarkId: string,
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<ErrorAndWarning<number | CPUBenchmarkResult>> {
   let runBenchmarks: Array<BenchmarkPlaywright> = benchmarks.filter(
     (b) =>
@@ -231,35 +200,12 @@ export async function executeBenchmark(
 
   let errorAndWarnings: ErrorAndWarning<number | CPUBenchmarkResult>;
   if (benchmark.type == BenchmarkType.CPU) {
-    errorAndWarnings = await runCPUBenchmark(framework, benchmark as CPUBenchmarkPlaywright, benchmarkOptions);
+    errorAndWarnings = await runCPUBenchmark(framework, benchmark as CPUBenchmarkPlaywright, benchmarkOptions, cfg);
   } else {
-    errorAndWarnings = await runMemBenchmark(framework, benchmark as MemBenchmarkPlaywright, benchmarkOptions);
+    errorAndWarnings = await runMemBenchmark(framework, benchmark as MemBenchmarkPlaywright, benchmarkOptions, cfg);
   }
-  if (config.LOG_DEBUG) console.log("benchmark finished - got errors promise", errorAndWarnings);
+  if (cfg.LOG_DEBUG) console.log("benchmark finished - got errors promise", errorAndWarnings);
   return errorAndWarnings;
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START PLAYWRIGHT BENCHMARK.");
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      console.log("* success", result);
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunner", error);
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+setupForkedRunner("Playwright", executeBenchmark);

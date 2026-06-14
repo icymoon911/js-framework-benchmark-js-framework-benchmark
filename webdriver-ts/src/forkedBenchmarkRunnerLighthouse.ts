@@ -1,11 +1,10 @@
 import * as chromeLauncher from "chrome-launcher";
 
-import { Config, config as defaultConfig, FrameworkData, ErrorAndWarning, BenchmarkOptions } from "./common.js";
+import { Config, FrameworkData, ErrorAndWarning, BenchmarkOptions } from "./common.js";
 import { BenchmarkLighthouse, StartupBenchmarkResult, benchmarks } from "./benchmarksLighthouse.js";
 import { StartupBenchmarkInfo } from "./benchmarksCommon.js";
 import lighthouse from "lighthouse";
-
-let config: Config = defaultConfig;
+import { convertError, setupForkedRunner } from "./forkedRunnerCommon.js";
 
 function extractRawValue(results: any, id: string) {
   let audits = results.audits;
@@ -19,7 +18,8 @@ function extractRawValue(results: any, id: string) {
 async function runLighthouse(
   framework: FrameworkData,
   startupBenchmarks: StartupBenchmarkInfo[],
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<StartupBenchmarkResult[]> {
   const opts: any = {
     chromeFlags: [
@@ -59,7 +59,7 @@ async function runLighthouse(
       await chrome.kill();
       throw error;
     }
-    if (config.LOG_DEBUG) console.log("lighthouse result", JSON.stringify(results));
+    if (cfg.LOG_DEBUG) console.log("lighthouse result", JSON.stringify(results));
 
     return startupBenchmarks.map((bench) => ({
         benchmark: bench,
@@ -71,49 +71,28 @@ async function runLighthouse(
   }
 }
 
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
-}
-
 async function runStartupBenchmark(
   framework: FrameworkData,
   benchmark: BenchmarkLighthouse,
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<ErrorAndWarning<StartupBenchmarkResult>> {
   console.log("benchmarking startup", framework, benchmark.benchmarkInfo.id);
 
   let error: string | undefined = undefined;
   try {
-    let result = await runLighthouse(framework, benchmark.subbenchmarks, benchmarkOptions);
+    let result = await runLighthouse(framework, benchmark.subbenchmarks, benchmarkOptions, cfg);
     return { error, warnings: [], result };
   } catch (error) {
     return { error: convertError(error), warnings: [] };
   }
 }
 
-export async function executeBenchmark(
+async function executeBenchmark(
   framework: FrameworkData,
   benchmarkId: string,
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ): Promise<ErrorAndWarning<StartupBenchmarkResult>> {
   let runBenchmarks: Array<BenchmarkLighthouse> = benchmarks.filter(
     (b) => benchmarkId === b.benchmarkInfo.id && b instanceof BenchmarkLighthouse
@@ -121,35 +100,7 @@ export async function executeBenchmark(
   if (runBenchmarks.length != 1) throw `Benchmark name ${benchmarkId} is not unique (lighthouse)`;
 
   let benchmark = runBenchmarks[0];
-
-  let errorAndWarnings: ErrorAndWarning<StartupBenchmarkResult>;
-  errorAndWarnings = await runStartupBenchmark(framework, benchmark, benchmarkOptions);
-  if (config.LOG_DEBUG) console.log("benchmark finished - got errors promise", errorAndWarnings);
-  return errorAndWarnings;
+  return await runStartupBenchmark(framework, benchmark, benchmarkOptions, cfg);
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START BENCHMARK. Write results?", config.WRITE_RESULTS);
-  // if (config.LOG_DEBUG) console.log("child process got message", msg);
-
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunnerLighthouse");
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+setupForkedRunner("Lighthouse", executeBenchmark);

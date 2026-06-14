@@ -2,12 +2,13 @@ import yargs from "yargs";
 import {
   BenchmarkOptions,
   BenchmarkRunner,
-  config,
+  Config,
+  createConfig,
   ErrorAndWarning,
   FrameworkData,
   initializeFrameworks,
 } from "./common.js";
-import { fork } from "node:child_process";
+import { fork, ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import {
@@ -19,134 +20,278 @@ import {
   CPUBenchmarkResult,
   MemBenchmarkInfo,
   SizeBenchmarkInfo,
+  SizeMainBenchmarkInfo,
   StartupBenchmarkInfo,
 } from "./benchmarksCommon.js";
 import { StartupBenchmarkResult } from "./benchmarksLighthouse.js";
-import { writeResults } from "./writeResults.js";
-import { PlausibilityCheck } from "./timeline.js";
+import { writeResults, ResultCPU, ResultMem, ResultSize, ResultLightHouse } from "./writeResults.js";
+import { PlausibilityCheck } from "./plausibilityCheck.js";
 import { SizeBenchmarkResult } from "./benchmarksSize.js";
+
+// ---- Types for parseArgs ----
+
+interface ParsedArgs {
+  headless: boolean;
+  smoketest: boolean;
+  type: string | undefined;
+  nothrottling: boolean;
+  runner: string;
+  browser: string;
+  framework: string[] | undefined;
+  benchmark: string[] | undefined;
+  count: number | undefined;
+  puppeteerSleep: number | undefined;
+  chromeBinary: string | undefined;
+  positionalArgs: string[];
+  help: boolean;
+}
+
+function parseArgs(): ParsedArgs {
+  const args = yargs(process.argv)
+    .usage(
+      "$0 [--framework Framework1 Framework2 ...] [--benchmark Benchmark1 Benchmark2 ...] [--chromeBinary path] \n or: $0 [directory1] [directory2] .. [directory3]"
+    )
+    .help("help")
+    .boolean("headless")
+    .default("headless", false)
+    .boolean("smoketest")
+    .string("type")
+    .boolean("nothrottling")
+    .default("nothrottling", false)
+    .string("runner")
+    .default("runner", "puppeteer")
+    .string("browser")
+    .default("browser", "chrome")
+    .array("framework")
+    .array("benchmark")
+    .number("count")
+    .number("puppeteerSleep")
+    .string("chromeBinary")
+    .parseSync();
+
+  const allArgs = (args._?.length ?? 0) <= 2 ? [] : (args._?.slice(2) ?? []).map(String);
+
+  return {
+    headless: args.headless as boolean,
+    smoketest: args.smoketest as boolean,
+    type: args.type as string | undefined,
+    nothrottling: args.nothrottling as boolean,
+    runner: args.runner as string,
+    browser: args.browser as string,
+    framework: args.framework as string[] | undefined,
+    benchmark: args.benchmark as string[] | undefined,
+    count: args.count as number | undefined,
+    puppeteerSleep: args.puppeteerSleep as number | undefined,
+    chromeBinary: args.chromeBinary as string | undefined,
+    positionalArgs: allArgs,
+    help: !!args.help,
+  };
+}
+
+function resolveRunner(runner: string): BenchmarkRunner {
+  const validRunners: BenchmarkRunner[] = [
+    BenchmarkRunner.WEBDRIVER_CDP,
+    BenchmarkRunner.WEBDRIVER_AFTERFRAME,
+    BenchmarkRunner.PLAYWRIGHT,
+    BenchmarkRunner.PUPPETEER,
+  ];
+  if (validRunners.includes(runner as BenchmarkRunner)) {
+    return runner as BenchmarkRunner;
+  }
+  console.log("ERROR: argument runner has illegal value " + runner, validRunners);
+  process.exit(1);
+}
+
+function filterBenchmarks(
+  infos: BenchmarkInfo[],
+  filterNames: string[],
+  runner: BenchmarkRunner
+): BenchmarkInfo[] {
+  return infos.filter(
+    (b) =>
+      (runner !== BenchmarkRunner.WEBDRIVER_AFTERFRAME || b.type == BenchmarkType.CPU) &&
+      filterNames.some((name) => b.id.toLowerCase().includes(name))
+  );
+}
+
+function filterFrameworks(
+  frameworks: FrameworkData[],
+  frameworkArgs: string[],
+  typeFilter: string | undefined,
+  runner: BenchmarkRunner
+): FrameworkData[] {
+  let result = frameworks.filter(
+    (f) => (frameworkArgs.length === 0 || frameworkArgs.some((arg) => arg == f.name)) &&
+           (f.keyed || runner !== BenchmarkRunner.WEBDRIVER_AFTERFRAME)
+  );
+
+  if (typeFilter === "keyed") {
+    result = result.filter((f) => f.keyed);
+    console.log("run only keyed frameworks");
+  } else if (typeFilter === "non-keyed") {
+    result = result.filter((f) => !f.keyed);
+    console.log("run only non-keyed frameworks");
+  }
+
+  return result;
+}
+
+// ---- Fork & call benchmark (with timeout) ----
+
+type BenchmarkResultUnion = number | CPUBenchmarkResult | StartupBenchmarkResult | SizeBenchmarkResult;
 
 function forkAndCallBenchmark(
   framework: FrameworkData,
   benchmarkInfo: BenchmarkInfo,
-  benchmarkOptions: BenchmarkOptions
-): Promise<ErrorAndWarning<number | CPUBenchmarkResult | StartupBenchmarkResult | SizeBenchmarkResult>> {
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
+): Promise<ErrorAndWarning<BenchmarkResultUnion>> {
   return new Promise((resolve, reject) => {
-    let forkedRunner = null;
+    let forkedRunner: string;
     if (benchmarkInfo.type === BenchmarkType.STARTUP_MAIN) {
       forkedRunner = "dist/forkedBenchmarkRunnerLighthouse.js";
     } else if (benchmarkInfo.type === BenchmarkType.SIZE_MAIN) {
       forkedRunner = "dist/forkedBenchmarkRunnerSize.js";
-    } else if (config.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_CDP) {
+    } else if (cfg.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_CDP) {
       forkedRunner = "dist/forkedBenchmarkRunnerWebdriverCDP.js";
-    } else if (config.BENCHMARK_RUNNER == BenchmarkRunner.PLAYWRIGHT) {
+    } else if (cfg.BENCHMARK_RUNNER == BenchmarkRunner.PLAYWRIGHT) {
       forkedRunner = "dist/forkedBenchmarkRunnerPlaywright.js";
-    } else if (config.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_AFTERFRAME) {
+    } else if (cfg.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_AFTERFRAME) {
       forkedRunner = "dist/forkedBenchmarkRunnerWebdriverAfterframe.js";
     } else {
       forkedRunner = "dist/forkedBenchmarkRunnerPuppeteer.js";
     }
     console.log("forking", forkedRunner);
-    const forked = fork(forkedRunner);
-    if (config.LOG_DETAILS) console.log("FORKING:  forked child process");
+    const forked: ChildProcess = fork(forkedRunner);
+    if (cfg.LOG_DETAILS) console.log("FORKING:  forked child process");
+
     forked.send({
-      config,
+      config: cfg,
       framework,
       benchmarkId: benchmarkInfo.id,
       benchmarkOptions,
     });
-    forked.on("message", (msg: ErrorAndWarning<number | CPUBenchmarkResult | StartupBenchmarkResult>) => {
-      if (config.LOG_DETAILS) console.log("FORKING: main process got message from child", msg);
+
+    // Timeout: kill child process if no response within cfg.TIMEOUT
+    const timer = setTimeout(() => {
+      console.error(`TIMEOUT: forked runner ${forkedRunner} did not respond within ${cfg.TIMEOUT}ms. Killing child process.`);
+      forked.removeAllListeners("message");
+      forked.removeAllListeners("error");
+      forked.kill("SIGKILL");
+      resolve({ error: `Timeout: ${forkedRunner} did not respond within ${cfg.TIMEOUT}ms`, warnings: [] });
+    }, cfg.TIMEOUT);
+
+    forked.on("message", (msg: ErrorAndWarning<BenchmarkResultUnion>) => {
+      clearTimeout(timer);
+      if (cfg.LOG_DETAILS) console.log("FORKING: main process got message from child", msg);
       resolve(msg);
     });
     forked.on("close", (msg) => {
-      if (config.LOG_DETAILS) console.log("FORKING: child closed", msg);
+      if (cfg.LOG_DETAILS) console.log("FORKING: child closed", msg);
     });
     forked.on("error", (msg) => {
-      if (config.LOG_DETAILS) console.log("FORKING: child error", msg);
+      clearTimeout(timer);
+      if (cfg.LOG_DETAILS) console.log("FORKING: child error", msg);
       reject(msg);
     });
     forked.on("exit", (code, signal) => {
-      if (config.LOG_DEBUG) console.log("child exit", code, signal);
+      if (cfg.LOG_DEBUG) console.log("child exit", code, signal);
     });
   });
 }
 
-async function runBenchmakLoopSize(
-  framework: FrameworkData,
-  benchmarkInfo: SizeBenchmarkInfo,
-  benchmarkOptions: BenchmarkOptions
-): Promise<{ errors: string[]; warnings: string[] }> {
-  let warnings: string[] = [];
-  let errors: string[] = [];
+// ---- Unified benchmark loop ----
 
-  let results: Array<SizeBenchmarkResult> = [];
-  let count = benchmarkOptions.numIterationsForSizeBenchmark;
-  benchmarkOptions.batchSize = 1;
-
-  let done = 0;
-
-  console.log("runBenchmakLoopSize", framework, benchmarkInfo);
-
-  while (done < count) {
-    console.log("FORKING:", benchmarkInfo.id, "BatchSize", benchmarkOptions.batchSize);
-    let res = await forkAndCallBenchmark(framework, benchmarkInfo, benchmarkOptions);
-    if (Array.isArray(res.result)) {
-      results = results.concat(res.result as SizeBenchmarkResult[]);
-    } else if (res.result !== undefined) {
-      results.push(res.result);
-    }
-    if (res.warnings) {
-      warnings = warnings.concat(res.warnings);
-    }
-    if (res.error) {
-      errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + res.error);
-    }
-    done++;
-  }
-  if (config.WRITE_RESULTS) {
-    await writeResults(benchmarkOptions.resultsDirectory, {
-      framework: framework,
-      benchmark: benchmarkInfo,
-      results: results,
-      type: BenchmarkType.SIZE,
-    });
-  }
-  return { errors, warnings };
-  // } else {
-  //     return executeBenchmark(frameworks, keyed, frameworkName, benchmarkName, benchmarkOptions);
+interface LoopHandler<T> {
+  /** How many iterations to run */
+  iterationCount(benchmarkInfo: T, benchmarkOptions: BenchmarkOptions, cfg: Readonly<Config>): number;
+  /** Initial batch size for the loop */
+  initialBatchSize(benchmarkInfo: T, benchmarkOptions: BenchmarkOptions, count: number, cfg: Readonly<Config>): number;
+  /** Write the collected results to disk */
+  writeResults(
+    resultsDir: string,
+    framework: FrameworkData,
+    benchmarkInfo: T,
+    results: any[]
+  ): Promise<void>;
 }
 
-async function runBenchmakLoop(
+const cpuLoopHandler: LoopHandler<CPUBenchmarkInfo> = {
+  iterationCount(info, opts, cfg) {
+    return opts.numIterationsForCPUBenchmarks + info.additionalNumberOfRuns;
+  },
+  initialBatchSize(info, opts, count, cfg) {
+    return cfg.ALLOW_BATCHING && info.allowBatching ? count : 1;
+  },
+  async writeResults(resultsDir, framework, info, results) {
+    await writeResults(resultsDir, {
+      framework,
+      benchmark: info,
+      results: results as CPUBenchmarkResult[],
+      type: BenchmarkType.CPU,
+    } as ResultCPU);
+  },
+};
+
+const memLoopHandler: LoopHandler<MemBenchmarkInfo> = {
+  iterationCount(_info, opts, _cfg) {
+    return opts.numIterationsForMemBenchmarks;
+  },
+  initialBatchSize() {
+    return 1;
+  },
+  async writeResults(resultsDir, framework, info, results) {
+    await writeResults(resultsDir, {
+      framework,
+      benchmark: info,
+      results: results as number[],
+      type: BenchmarkType.MEM,
+    } as ResultMem);
+  },
+};
+
+const sizeLoopHandler: LoopHandler<SizeMainBenchmarkInfo> = {
+  iterationCount(_info, opts, _cfg) {
+    return opts.numIterationsForSizeBenchmark;
+  },
+  initialBatchSize() {
+    return 1;
+  },
+  async writeResults(resultsDir, framework, info, results) {
+    await writeResults(resultsDir, {
+      framework,
+      benchmark: info,
+      results: results as SizeBenchmarkResult[],
+      type: BenchmarkType.SIZE,
+    } as ResultSize);
+  },
+};
+
+async function runBenchmarkLoop<T extends BenchmarkInfo>(
+  handler: LoopHandler<T>,
   framework: FrameworkData,
-  benchmarkInfo: CPUBenchmarkInfo | MemBenchmarkInfo,
+  benchmarkInfo: T,
   benchmarkOptions: BenchmarkOptions,
-  plausibilityCheck: PlausibilityCheck
+  cfg: Readonly<Config>
 ): Promise<{ errors: string[]; warnings: string[] }> {
   let warnings: string[] = [];
   let errors: string[] = [];
+  let results: any[] = [];
 
-  let results: Array<CPUBenchmarkResult | number> = [];
-  let count = 0;
+  const count = handler.iterationCount(benchmarkInfo, benchmarkOptions, cfg);
+  let batchSize = handler.initialBatchSize(benchmarkInfo, benchmarkOptions, count, cfg);
+  benchmarkOptions.batchSize = batchSize;
 
-  if (benchmarkInfo.type == BenchmarkType.CPU) {
-    count = benchmarkOptions.numIterationsForCPUBenchmarks + benchmarkInfo.additionalNumberOfRuns;
-    benchmarkOptions.batchSize = config.ALLOW_BATCHING && benchmarkInfo.allowBatching ? count : 1;
-  } else if (benchmarkInfo.type == BenchmarkType.MEM) {
-    count = benchmarkOptions.numIterationsForMemBenchmarks;
-    benchmarkOptions.batchSize = 1;
-  }
-
-  let retries = 0;
-
-  console.log("runBenchmakLoop", framework, benchmarkInfo);
+  console.log("runBenchmarkLoop", framework.name, benchmarkInfo.id, "count=", count, "batchSize=", batchSize);
 
   while (results.length < count) {
     benchmarkOptions.batchSize = Math.min(benchmarkOptions.batchSize, count - results.length);
     console.log("FORKING:", benchmarkInfo.id, "BatchSize", benchmarkOptions.batchSize);
-    let res = await forkAndCallBenchmark(framework, benchmarkInfo, benchmarkOptions);
+
+    let res = await forkAndCallBenchmark(framework, benchmarkInfo, benchmarkOptions, cfg);
+
     if (Array.isArray(res.result)) {
-      results = results.concat(res.result as number[] | CPUBenchmarkResult[]);
+      results = results.concat(res.result);
     } else if (res.result !== undefined) {
       results.push(res.result);
     }
@@ -159,35 +304,26 @@ async function runBenchmakLoop(
       break;
     }
   }
-  if (config.WRITE_RESULTS) {
+
+  if (cfg.WRITE_RESULTS) {
     try {
-      if (benchmarkInfo.type == BenchmarkType.CPU) {
-        await writeResults(benchmarkOptions.resultsDirectory, {
-          framework: framework,
-          benchmark: benchmarkInfo,
-          results: results as CPUBenchmarkResult[],
-          type: BenchmarkType.CPU,
-        });
-      } else {
-        await writeResults(benchmarkOptions.resultsDirectory, {
-          framework: framework,
-          benchmark: benchmarkInfo,
-          results: results as number[],
-          type: BenchmarkType.MEM,
-        });
-      }      
+      await handler.writeResults(benchmarkOptions.resultsDirectory, framework, benchmarkInfo, results);
     } catch (e) {
-        console.error(e);
-        errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + e);
+      console.error(e);
+      errors.push(`Executing ${framework.uri} and benchmark ${benchmarkInfo.id} failed: ` + e);
     }
   }
+
   return { errors, warnings };
 }
+
+// ---- runBench orchestrator ----
 
 async function runBench(
   runFrameworks: FrameworkData[],
   benchmarkInfos: BenchmarkInfo[],
-  benchmarkOptions: BenchmarkOptions
+  benchmarkOptions: BenchmarkOptions,
+  cfg: Readonly<Config>
 ) {
   let errors: string[] = [];
   let warnings: string[] = [];
@@ -214,26 +350,33 @@ async function runBench(
     for (let i = 0; i < runFrameworks.length; i++) {
       try {
         let result;
+        const bi = benchmarkInfos[j];
 
-        if (benchmarkInfos[j].type == BenchmarkType.SIZE_MAIN) {
-          result = await runBenchmakLoopSize(
+        if (bi.type == BenchmarkType.SIZE_MAIN) {
+          // Size benchmarks are dispatched via their sub-benchmarks
+          // The loop handler iterates numIterationsForSizeBenchmark times
+          result = await runBenchmarkLoop(
+            sizeLoopHandler,
             runFrameworks[i],
-            benchmarkInfos[j] as SizeBenchmarkInfo,
-            benchmarkOptions
-          );
-        } else if (benchmarkInfos[j].type == BenchmarkType.CPU) {
-          result = await runBenchmakLoop(
-            runFrameworks[i],
-            benchmarkInfos[j] as CPUBenchmarkInfo,
+            bi as SizeMainBenchmarkInfo,
             benchmarkOptions,
-            plausibilityCheck
+            cfg
+          );
+        } else if (bi.type == BenchmarkType.CPU) {
+          result = await runBenchmarkLoop(
+            cpuLoopHandler,
+            runFrameworks[i],
+            bi as CPUBenchmarkInfo,
+            benchmarkOptions,
+            cfg
           );
         } else {
-          result = await runBenchmakLoop(
+          result = await runBenchmarkLoop(
+            memLoopHandler,
             runFrameworks[i],
-            benchmarkInfos[j] as MemBenchmarkInfo,
+            bi as MemBenchmarkInfo,
             benchmarkOptions,
-            plausibilityCheck
+            cfg
           );
         }
         errors = errors.concat(result.errors);
@@ -251,7 +394,6 @@ async function runBench(
     console.log("================================");
     console.log("The following warnings were logged:");
     console.log("================================");
-
     warnings.forEach((e) => {
       console.log(e);
     });
@@ -263,7 +405,6 @@ async function runBench(
     console.log("================================");
     console.log("The following benchmarks failed:");
     console.log("================================");
-
     errors.forEach((e) => {
       console.log(e);
     });
@@ -271,57 +412,25 @@ async function runBench(
   }
 }
 
-async function main() {
-  // FIXME: Clean up args.
-  // What works: npm run bench keyed/react, npm run bench -- keyed/react, npm run bench -- keyed/react --count 1 --benchmark 01_
-  // What doesn't work (keyed/react becomes an element of argument benchmark): npm run bench -- --count 1 --benchmark 01_ keyed/react
+// ---- main ----
 
+async function main() {
   console.error("PLEASE MAKE SURE THAT YOUR MOUSE IS OUTSIDE OF THE BROWSER WINDOW - and sorry for shouting :-) ");
 
-  let args: any = yargs(process.argv)
-    .usage(
-      "$0 [--framework Framework1 Framework2 ...] [--benchmark Benchmark1 Benchmark2 ...] [--chromeBinary path] \n or: $0 [directory1] [directory2] .. [directory3]"
-    )
-    .help("help")
-    .boolean("headless")
-    .default("headless", false)
-    .boolean("smoketest")
-    .string("type")
-    .boolean("nothrottling")
-    .default("nothrottling", false)
-    .string("runner")
-    .default("runner", "puppeteer")
-    .string("browser")
-    .default("browser", "chrome")
-    .array("framework")
-    .array("benchmark")
-    .number("count")
-    .number("puppeteerSleep")
-    .string("chromeBinary").argv;
-
+  const args = parseArgs();
   console.log("args", args);
 
-  let runner = args.runner;
-  if (
-    [
-      BenchmarkRunner.WEBDRIVER_CDP,
-      BenchmarkRunner.WEBDRIVER_AFTERFRAME,
-      BenchmarkRunner.PLAYWRIGHT,
-      BenchmarkRunner.PUPPETEER,
-    ].includes(runner)
-  ) {
-    console.log(`INFO: Using ${runner} benchmark runner`);
-    config.BENCHMARK_RUNNER = runner;
-  } else {
-    console.log("ERROR: argument driver has illegal value " + runner, [
-      BenchmarkRunner.WEBDRIVER_CDP,
-      BenchmarkRunner.WEBDRIVER_AFTERFRAME,
-      BenchmarkRunner.PLAYWRIGHT,
-      BenchmarkRunner.PUPPETEER,
-    ]);
-    process.exit(1);
-  }
+  const runner = resolveRunner(args.runner);
+  console.log(`INFO: Using ${runner} benchmark runner`);
+
   console.log("HEADLESS***", args.headless);
+
+  // Build an initial config, then derive benchmarkOptions from it
+  const cfg = createConfig({
+    BENCHMARK_RUNNER: runner,
+    PUPPETEER_WAIT_MS: args.puppeteerSleep ?? 0,
+    NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: args.count ? 0 : 0,
+  });
 
   let benchmarkOptions: BenchmarkOptions = {
     port: 8080,
@@ -332,10 +441,10 @@ async function main() {
     headless: args.headless,
     chromeBinaryPath: args.chromeBinary,
     numIterationsForCPUBenchmarks:
-      config.NUM_ITERATIONS_FOR_BENCHMARK_CPU + config.NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT,
-    numIterationsForMemBenchmarks: config.NUM_ITERATIONS_FOR_BENCHMARK_MEM,
-    numIterationsForStartupBenchmark: config.NUM_ITERATIONS_FOR_BENCHMARK_STARTUP,
-    numIterationsForSizeBenchmark: config.NUM_ITERATIONS_FOR_BENCHMARK_SIZE,
+      cfg.NUM_ITERATIONS_FOR_BENCHMARK_CPU + cfg.NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT,
+    numIterationsForMemBenchmarks: cfg.NUM_ITERATIONS_FOR_BENCHMARK_MEM,
+    numIterationsForStartupBenchmark: cfg.NUM_ITERATIONS_FOR_BENCHMARK_STARTUP,
+    numIterationsForSizeBenchmark: cfg.NUM_ITERATIONS_FOR_BENCHMARK_SIZE,
     batchSize: 1,
     resultsDirectory: "results",
     tracesDirectory: "traces",
@@ -343,18 +452,14 @@ async function main() {
     puppeteerSleep: args.puppeteerSleep ?? 0,
   };
 
-  config.PUPPETEER_WAIT_MS = benchmarkOptions.puppeteerSleep ?? 0;
-
   if (args.count) {
     benchmarkOptions.numIterationsForCPUBenchmarks = args.count;
-    config.NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT = 0;
     benchmarkOptions.numIterationsForMemBenchmarks = args.count;
     benchmarkOptions.numIterationsForStartupBenchmark = args.count;
   }
 
-  let allArgs = args._.length <= 2 ? [] : args._.slice(2);
-  let frameworkArgument = args.framework ? args.framework : allArgs;
-  console.log("args", args, "allArgs", allArgs);
+  let frameworkArgument = args.framework ? args.framework : args.positionalArgs;
+  console.log("frameworkArgument", frameworkArgument);
 
   if (process.env.HOST) {
     benchmarkOptions.host = process.env.HOST;
@@ -362,51 +467,38 @@ async function main() {
   }
   console.log("benchmarkOptions", benchmarkOptions);
 
-  let runBenchmarksArgs: string[] = args.benchmark && args.benchmark.length > 0 ? args.benchmark : [""];
-  let runBenchmarks: Array<BenchmarkInfo> = benchmarkInfos.filter(
-    (b) =>
-      // afterframe currently only targets CPU benchmarks
-      (config.BENCHMARK_RUNNER !== BenchmarkRunner.WEBDRIVER_AFTERFRAME || b.type == BenchmarkType.CPU) &&
-      runBenchmarksArgs.some((name) => b.id.toLowerCase().includes(name))
-  );
+  const runBenchmarksArgs: string[] = args.benchmark && args.benchmark.length > 0 ? args.benchmark : [""];
+  const runBenchmarks = filterBenchmarks(benchmarkInfos, runBenchmarksArgs, runner);
 
-  let runFrameworks: FrameworkData[];
-  let matchesDirectoryArg = (directoryName: string) =>
-    frameworkArgument.length === 0 || frameworkArgument.some((arg: string) => arg == directoryName);
-  let frameworks = await initializeFrameworks(benchmarkOptions, matchesDirectoryArg);
-  runFrameworks = frameworks.filter((f) => f.keyed || config.BENCHMARK_RUNNER !== BenchmarkRunner.WEBDRIVER_AFTERFRAME);
+  const frameworks = await initializeFrameworks(benchmarkOptions, undefined, cfg);
+  let runFrameworks = filterFrameworks(frameworks, frameworkArgument, args.type, runner);
 
-  if (args.type == "keyed") {
-    runFrameworks = runFrameworks.filter((f) => f.keyed);
-    console.log("run only keyed frameworks");
-  } else if (args.type == "non-keyed") {
-    runFrameworks = runFrameworks.filter((f) => !f.keyed);
-    console.log("run only non-keyed frameworks");
-  }
-
-  console.log("ARGS.smotest", args.smoketest);
+  // Smoketest overrides — build a new config with overrides
+  let finalCfg = cfg;
   if (args.smoketest) {
-    config.WRITE_RESULTS = false;
-    benchmarkOptions.numIterationsForCPUBenchmarks = 1;
-    benchmarkOptions.numIterationsForMemBenchmarks = 1;
-    benchmarkOptions.numIterationsForStartupBenchmark = 1;
-    config.NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT = 0;
-    config.EXIT_ON_ERROR = true;
     cpuBenchmarkInfosArray.forEach((b) => {
       b.additionalNumberOfRuns = 0;
     });
-    console.log("Using smoketest config", JSON.stringify(config));
+    finalCfg = createConfig({
+      ...cfg,
+      WRITE_RESULTS: false,
+      EXIT_ON_ERROR: true,
+      NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: 0,
+    });
+    benchmarkOptions.numIterationsForCPUBenchmarks = 1;
+    benchmarkOptions.numIterationsForMemBenchmarks = 1;
+    benchmarkOptions.numIterationsForStartupBenchmark = 1;
+    console.log("Using smoketest config", JSON.stringify(finalCfg));
   }
-  if (config.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_AFTERFRAME) {
+
+  if (finalCfg.BENCHMARK_RUNNER == BenchmarkRunner.WEBDRIVER_AFTERFRAME) {
     benchmarkOptions.resultsDirectory = "results_client_" + benchmarkOptions.browser;
   }
   if (!fs.existsSync(benchmarkOptions.resultsDirectory)) fs.mkdirSync(benchmarkOptions.resultsDirectory);
   if (!fs.existsSync(benchmarkOptions.tracesDirectory)) fs.mkdirSync(benchmarkOptions.tracesDirectory);
 
-  if (args.help) {
-    // yargs.showHelp();
-  } else {
-    return runBench(runFrameworks, runBenchmarks, benchmarkOptions);
+  if (!args.help) {
+    return runBench(runFrameworks, runBenchmarks, benchmarkOptions, finalCfg);
   }
 }
 
