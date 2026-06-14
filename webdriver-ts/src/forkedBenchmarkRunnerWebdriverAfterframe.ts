@@ -5,6 +5,7 @@ import { setUseShadowRoot, setUseRowShadowRoot, setShadowRootName, setButtonsInS
 import { Config, config as defaultConfig, FrameworkData, ErrorAndWarning, BenchmarkOptions } from "./common.js";
 import { BenchmarkType, CPUBenchmarkResult } from "./benchmarksCommon.js";
 import { getAfterframeDurations, initMeasurement } from "./benchmarksWebdriverAfterframe.js";
+import { convertError, startForkedRunner } from "./forkedRunnerCommon.js";
 
 let config: Config = defaultConfig;
 
@@ -29,29 +30,6 @@ async function initBenchmark(
   await initMeasurement(driver);
 }
 
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
-}
-
 async function runCPUBenchmark(
   framework: FrameworkData,
   benchmark: CPUBenchmarkWebdriver,
@@ -64,7 +42,6 @@ async function runCPUBenchmark(
   console.log("benchmarking", framework, benchmark.benchmarkInfo.id);
   let driver: WebDriver | null = null;
   try {
-    // let driver = buildDriver(benchmarkOptions);
     driver = await new Builder().forBrowser(benchmarkOptions.browser).build();
     console.log(`using afterframe measurement with ${benchmarkOptions.browser}`);
     await driver.manage().window().maximize();
@@ -77,10 +54,7 @@ async function runCPUBenchmark(
       }
       setButtonsInShadowRoot(framework.buttonsInShadowRoot);
       console.log("runCPUBenchmark: before loading page");
-      // must be run with an IP adress otherwise Safari crashes with an error.
-      // Use the HOST env variable to set the HOST to an IP adress for safari!
       await driver.get(`http://${benchmarkOptions.host}:${benchmarkOptions.port}/${framework.uri}/index.html`);
-      // Needed for Firefox
       await driver.sleep(50);
       console.log("runCPUBenchmark: initBenchmark");
       await initBenchmark(driver, benchmark, framework);
@@ -128,26 +102,4 @@ export async function executeBenchmark(
   return errorAndWarnings;
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START BENCHMARK. Write results?", config.WRITE_RESULTS);
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunner");
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+startForkedRunner("forkedBenchmarkRunnerWebdriverAfterframe", executeBenchmark);

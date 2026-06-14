@@ -4,6 +4,7 @@ import { Config, config as defaultConfig, FrameworkData, ErrorAndWarning, Benchm
 import { BenchmarkLighthouse, StartupBenchmarkResult, benchmarks } from "./benchmarksLighthouse.js";
 import { StartupBenchmarkInfo } from "./benchmarksCommon.js";
 import lighthouse from "lighthouse";
+import { convertError, startForkedRunner } from "./forkedRunnerCommon.js";
 
 let config: Config = defaultConfig;
 
@@ -71,29 +72,6 @@ async function runLighthouse(
   }
 }
 
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
-}
-
 async function runStartupBenchmark(
   framework: FrameworkData,
   benchmark: BenchmarkLighthouse,
@@ -128,28 +106,4 @@ export async function executeBenchmark(
   return errorAndWarnings;
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START BENCHMARK. Write results?", config.WRITE_RESULTS);
-  // if (config.LOG_DEBUG) console.log("child process got message", msg);
-
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunnerLighthouse");
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+startForkedRunner("forkedBenchmarkRunnerLighthouse", executeBenchmark);

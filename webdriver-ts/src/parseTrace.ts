@@ -15,7 +15,7 @@ async function debugSingle() {
     const trace = `traces/targetjs-v1.0.137-keyed_09_clear1k_x8_3.json`;
     // const trace = `traces/vanillajs-keyed_01_run1k_0.json`;
     console.log("analyzing trace", trace);
-    const cpuTrace = await computeResultsCPU(trace, "click");
+    const cpuTrace = await computeResultsCPU(trace, "click", config);
     console.log(trace, cpuTrace);
     values.push(cpuTrace.duration);
     let resultJS = await computeResultsJS(cpuTrace, config, trace);
@@ -53,7 +53,7 @@ async function debugAll() {
   let plausibilityCheck = new PlausibilityCheck();
   for (let framework of frameworks) {
     for (let benchmarkInfo of cpuCPUBenchmarks) {
-      await parseCPUTrace(benchmarkOptions, framework, benchmarkInfo, plausibilityCheck, framework.startLogicEventName);
+      await parseCPUTrace(benchmarkOptions, framework, benchmarkInfo, plausibilityCheck, framework.startLogicEventName, config);
     }
   }
   plausibilityCheck.print();

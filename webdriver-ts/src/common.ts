@@ -46,13 +46,6 @@ export interface BenchmarkOptions {
   puppeteerSleep?: number;
 }
 
-/*
-  RESULTS_DIRECTORY: "results",
-  TRACES_DIRECTORY: "traces",
-  BROWSER: "chrome",
-  HOST: 'localhost',
-*/
-
 export enum BenchmarkRunner {
   PUPPETEER = "puppeteer",
   PLAYWRIGHT = "playwright",
@@ -60,9 +53,31 @@ export enum BenchmarkRunner {
   WEBDRIVER_AFTERFRAME = "webdriver-afterframe",
 }
 
-export let config = {
+export interface Config {
+  NUM_ITERATIONS_FOR_BENCHMARK_CPU: number;
+  NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: number;
+  NUM_ITERATIONS_FOR_BENCHMARK_MEM: number;
+  NUM_ITERATIONS_FOR_BENCHMARK_STARTUP: number;
+  NUM_ITERATIONS_FOR_BENCHMARK_SIZE: number;
+  TIMEOUT: number;
+  LOG_PROGRESS: boolean;
+  LOG_DETAILS: boolean;
+  LOG_DEBUG: boolean;
+  LOG_TIMELINE: boolean;
+  EXIT_ON_ERROR: boolean;
+  STARTUP_DURATION_FROM_EVENTLOG: boolean;
+  STARTUP_SLEEP_DURATION: number;
+  WRITE_RESULTS: boolean;
+  ALLOW_BATCHING: boolean;
+  BENCHMARK_RUNNER: BenchmarkRunner;
+  PUPPETEER_WAIT_MS: number;
+}
+
+export type ReadonlyConfig = Readonly<Config>;
+
+const DEFAULT_CONFIG: Config = {
   NUM_ITERATIONS_FOR_BENCHMARK_CPU: 15,
-  NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: 0, // drop the # of slowest results
+  NUM_ITERATIONS_FOR_BENCHMARK_CPU_DROP_SLOWEST_COUNT: 0,
   NUM_ITERATIONS_FOR_BENCHMARK_MEM: 1,
   NUM_ITERATIONS_FOR_BENCHMARK_STARTUP: 1,
   NUM_ITERATIONS_FOR_BENCHMARK_SIZE: 1,
@@ -71,7 +86,7 @@ export let config = {
   LOG_DETAILS: false,
   LOG_DEBUG: false,
   LOG_TIMELINE: false,
-  EXIT_ON_ERROR: false, // set from command line
+  EXIT_ON_ERROR: false,
   STARTUP_DURATION_FROM_EVENTLOG: true,
   STARTUP_SLEEP_DURATION: 1000,
   WRITE_RESULTS: true,
@@ -79,7 +94,29 @@ export let config = {
   BENCHMARK_RUNNER: BenchmarkRunner.PUPPETEER,
   PUPPETEER_WAIT_MS: 0,
 };
-export type Config = typeof config;
+
+/**
+ * Creates an immutable (frozen) configuration object.
+ * Use this in the main benchmark runner to create a config from CLI args,
+ * then pass it to downstream functions and forked processes.
+ */
+export function createConfig(overrides?: Partial<Config>): ReadonlyConfig {
+  const merged: Config = { ...DEFAULT_CONFIG, ...overrides };
+  return Object.freeze(merged);
+}
+
+/**
+ * Default config instance. Forked runners reassign this from IPC messages.
+ * Prefer `createConfig()` for new code; this exists for backward compat.
+ */
+export let config: Config = { ...DEFAULT_CONFIG };
+
+/**
+ * Replace the global config (used by forked runners receiving config via IPC).
+ */
+export function setGlobalConfig(newConfig: Config): void {
+  config = newConfig;
+}
 
 export interface FrameworkData {
   name: string;
@@ -137,7 +174,8 @@ async function fetchFrameworks(url: string) {
 
 export async function initializeFrameworks(
   benchmarkOptions: BenchmarkOptions,
-  matchPredicate: MatchPredicate = matchAll
+  matchPredicate: MatchPredicate = matchAll,
+  cfg: ReadonlyConfig = config
 ): Promise<FrameworkData[]> {
   let lsResult;
   const lsUrl = `http://${benchmarkOptions.host}:${benchmarkOptions.port}/ls`;
@@ -172,7 +210,7 @@ export async function initializeFrameworks(
       });
     }
   }
-  if (config.LOG_DETAILS) {
+  if (cfg.LOG_DETAILS) {
     console.log("All available frameworks: ");
     console.log(frameworks.map((fd) => fd.fullNameWithKeyedAndVersion));
   }
@@ -184,4 +222,3 @@ export const wait = (delay = 1000) => {
   if (delay === 0) return Promise.resolve();
   else return new Promise((res) => setTimeout(res, delay));
 };
-

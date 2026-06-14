@@ -1,16 +1,17 @@
-import { Browser, CDPSession, Page } from "puppeteer-core";
+import { Browser, Page } from "puppeteer-core";
 import { BenchmarkType, CPUBenchmarkResult, slowDownFactor } from "./benchmarksCommon.js";
 import { CPUBenchmarkPuppeteer, MemBenchmarkPuppeteer, BenchmarkPuppeteer, benchmarks } from "./benchmarksPuppeteer.js";
 import {
   BenchmarkOptions,
-  config as defaultConfig,
   ErrorAndWarning,
   FrameworkData,
   Config,
   wait,
+  config as defaultConfig,
 } from "./common.js";
 import { startBrowser } from "./puppeteerAccess.js";
 import { computeResultsCPU, computeResultsJS, computeResultsPaint, fileNameTrace } from "./timeline.js";
+import { convertError, startForkedRunner } from "./forkedRunnerCommon.js";
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 
@@ -24,29 +25,6 @@ async function runBenchmark(page: Page, benchmark: BenchmarkPuppeteer, framework
 async function initBenchmark(page: Page, benchmark: BenchmarkPuppeteer, framework: FrameworkData): Promise<any> {
   await benchmark.init(page, framework);
   if (config.LOG_PROGRESS) console.log("after initialized", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
-}
-
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
 }
 
 async function forceGC(page: Page) {
@@ -63,15 +41,8 @@ async function runCPUBenchmark(
 
   console.log("benchmarking", framework, benchmark.benchmarkInfo.id);
   let browser: Browser | null = null;
-  // let page: Page = null;
   try {
     browser = await startBrowser(benchmarkOptions);
-    // page = await browser.newPage();
-    // if (config.LOG_DETAILS) {
-    // page.on("console", (msg) => {
-    //   for (let i = 0; i < msg.args().length; ++i) console.log(`BROWSER: ${msg.args()[i]}`);
-    // });
-    // }
     for (let i = 0; i < benchmarkOptions.batchSize; i++) {
       const page = await browser.newPage();
       page.on("console", (msg) => console.log("BROWSER:", ...msg.args()));
@@ -86,41 +57,15 @@ async function runCPUBenchmark(
         });
       }
 
-      // await (driver as any).sendDevToolsCommand('Network.enable');
-      // await (driver as any).sendDevToolsCommand('Network.emulateNetworkConditions', {
-      //     offline: false,
-      //     latency: 200, // ms
-      //     downloadThroughput: 780 * 1024 / 8, // 780 kb/s
-      //     uploadThroughput: 330 * 1024 / 8, // 330 kb/s
-      // });
-
       console.log("initBenchmark");
       await initBenchmark(page, benchmark, framework);
 
-      // let categories = ["blink.user_timing", "devtools.timeline", "disabled-by-default-devtools.timeline"];
-      // "blink", "cc","toplevel","v8","benchmark","gpu","viz"
       let categories = [
         "disabled-by-default-v8.cpu_profiler",
         "blink.user_timing",
         "devtools.timeline",
         "disabled-by-default-devtools.timeline",
       ];
-
-      // let categories = [
-      //   "-*", // exclude default
-      //   "toplevel",
-      //   "v8.execute",
-      //   "blink.console",
-      //   "blink.user_timing",
-      //   "benchmark",
-      //   "loading",
-      //   "latencyInfo",
-      //   "devtools.timeline",
-      //   "disabled-by-default-devtools.timeline",
-      //   "disabled-by-default-devtools.timeline.frame",
-      //   "disabled-by-default-devtools.timeline.stack",
-      //   "disabled-by-default-devtools.screenshot",
-      // ];
 
       let throttleCPU = slowDownFactor(benchmark.benchmarkInfo.id, benchmarkOptions.allowThrottling);
       if (throttleCPU) {
@@ -138,19 +83,15 @@ async function runCPUBenchmark(
       await forceGC(page);
 
       console.log("runBenchmark");
-      // let m1 = await page.metrics();
 
       await runBenchmark(page, benchmark, framework);
 
       await wait(100);
       await page.tracing.stop();
-      // let m2 = await page.metrics();
       if (throttleCPU) {
         await page.emulateCPUThrottling(1);
       }
 
-      // console.log("afterBenchmark", m1, m2);
-      // let result = (m2.TaskDuration - m1.TaskDuration)*1000.0; //await computeResultsCPU(fileNameTrace(framework, benchmark, i), benchmarkOptions, framework, benchmark, warnings, benchmarkOptions.batchSize);
       try {
         let result = await computeResultsCPU(fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions), framework.startLogicEventName);
         let resultScript = await computeResultsJS(
@@ -164,7 +105,6 @@ async function runCPUBenchmark(
           fileNameTrace(framework, benchmark.benchmarkInfo, i, benchmarkOptions)
         );
         console.log("**** resultScript =", resultScript);
-        // if (m2.Timestamp == m1.Timestamp) throw new Error("Page metrics timestamp didn't change");
         results.push({ total: result.duration, script: resultScript, paint: resultPaint });
         console.log(`duration for ${framework.name} and ${benchmark.benchmarkInfo.id}: ${JSON.stringify(result)}`);
         if (result.duration < 0) throw new Error(`duration ${result} < 0`);
@@ -180,7 +120,6 @@ async function runCPUBenchmark(
             errorFileName
           );
           i--;
-
           continue;
         } else {
           console.log("*** Unhandled error:", error);
@@ -233,13 +172,6 @@ async function runMemBenchmark(
         waitUntil: "networkidle0",
       });
 
-      // await (driver as any).sendDevToolsCommand('Network.enable');
-      // await (driver as any).sendDevToolsCommand('Network.emulateNetworkConditions', {
-      //     offline: false,
-      //     latency: 200, // ms
-      //     downloadThroughput: 780 * 1024 / 8, // 780 kb/s
-      //     uploadThroughput: 330 * 1024 / 8, // 330 kb/s
-      // });
       console.log("initBenchmark");
       await initBenchmark(page, benchmark, framework);
       const client = await page.createCDPSession();
@@ -253,13 +185,6 @@ async function runMemBenchmark(
 
       results.push(result);
       console.log(`memory result for ${framework.name} and ${benchmark.benchmarkInfo.id}: ${result}`);
-
-      // await client.send('Performance.enable');
-      // let cdpMetrics = await client.send('Performance.getMetrics');
-      // let response = cdpMetrics.metrics.filter((m) => m.name==='JSHeapUsedSize')[0].value
-      // console.log("Performance.getMetrics", response, response/1024/1024);
-
-      // await wait(10 * 1000 * 1000 * 60);
 
       if (result < 0) throw new Error(`memory result ${result} < 0`);
     }
@@ -300,34 +225,8 @@ export async function executeBenchmark(
   }
   if (config.LOG_DEBUG) console.log("benchmark finished - got errors promise", errorAndWarnings);
   const duration = performance.now() - startTime;
-  console.log(`=> Duration for ${benchmark.benchmarkInfo.id} and framework ${framework.name}: ${duration.toFixed(2)} ms`)
+  console.log(`=> Duration for ${benchmark.benchmarkInfo.id} and framework ${framework.name}: ${duration.toFixed(2)} ms`);
   return errorAndWarnings;
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START BENCHMARK. Write results?", config.WRITE_RESULTS);
-  // if (config.LOG_DEBUG) console.log("child process got message", msg);
-
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  defaultConfig.PUPPETEER_WAIT_MS = benchmarkOptions.puppeteerSleep ?? 0;
-  console.log("forked runner using sleep for puppeteer", config.PUPPETEER_WAIT_MS);
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunnerPuppeteer");
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+startForkedRunner("forkedBenchmarkRunnerPuppeteer", executeBenchmark);

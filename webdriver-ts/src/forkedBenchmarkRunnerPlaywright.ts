@@ -1,4 +1,4 @@
-import { Browser, Page, CDPSession } from "playwright-core";
+import { Browser, Page } from "playwright-core";
 import { BenchmarkType, CPUBenchmarkResult, slowDownFactor } from "./benchmarksCommon.js";
 import {
   benchmarks,
@@ -9,6 +9,7 @@ import {
 import { BenchmarkOptions, config as defaultConfig, ErrorAndWarning, FrameworkData, Config } from "./common.js";
 import { startBrowser } from "./playwrightAccess.js";
 import { computeResultsCPU, computeResultsJS, computeResultsPaint, fileNameTrace } from "./timeline.js";
+import { convertError, startForkedRunner } from "./forkedRunnerCommon.js";
 
 let config: Config = defaultConfig;
 
@@ -30,35 +31,9 @@ async function initBenchmark(
 ): Promise<any> {
   await benchmark.init(browser, page, framework);
   if (config.LOG_PROGRESS) console.log("after initialized", benchmark.benchmarkInfo.id, benchmark.type, framework.name);
-  // if (benchmark.type === BenchmarkType.MEM) {
-  //   await forceGC(page);
-  // }
 }
 
 const wait = (delay = 1000) => new Promise((res) => setTimeout(res, delay));
-
-function convertError(error: any): string {
-  console.log(
-    "ERROR in run Benchmark: |",
-    error,
-    "| type:",
-    typeof error,
-    "instance of Error",
-    error instanceof Error,
-    "Message:",
-    error.message
-  );
-  if (typeof error === "string") {
-    console.log("Error is string");
-    return error;
-  } else if (error instanceof Error) {
-    console.log("Error is instanceof Error");
-    return error.message;
-  } else {
-    console.log("Error is unknown type");
-    return error.toString();
-  }
-}
 
 async function forceGC(page: Page) {
   await page.evaluate("window.gc({type:'major',execution:'sync',flavor:'last-resort'})");
@@ -79,13 +54,10 @@ async function runCPUBenchmark(
     browser = await startBrowser(benchmarkOptions);
     for (let i = 0; i < benchmarkOptions.batchSize; i++) {
       let page = await browser.newPage();
-      // if (config.LOG_DETAILS) {
       page.on("console", (msg) => {
-        for (let i = 0; i < msg.args().length; ++i) console.log(`BROWSER: ${msg.args()[i]}`);
+        for (let j = 0; j < msg.args().length; ++j) console.log(`BROWSER: ${msg.args()[j]}`);
       });
-      // }
       let client = await page.context().newCDPSession(page);
-      // await client.send("Performance.enable");
       await page.goto(`http://${benchmarkOptions.host}:${benchmarkOptions.port}/${framework.uri}/index.html`, {
         waitUntil: "networkidle",
       });
@@ -169,7 +141,7 @@ async function runMemBenchmark(
     for (let i = 0; i < benchmarkOptions.batchSize; i++) {
       if (config.LOG_DETAILS) {
         page.on("console", (msg) => {
-          for (let i = 0; i < msg.args().length; ++i) console.log(`BROWSER: ${msg.args()[i]}`);
+          for (let j = 0; j < msg.args().length; ++j) console.log(`BROWSER: ${msg.args()[j]}`);
         });
       }
 
@@ -177,13 +149,6 @@ async function runMemBenchmark(
         waitUntil: "networkidle",
       });
 
-      // await (driver as any).sendDevToolsCommand('Network.enable');
-      // await (driver as any).sendDevToolsCommand('Network.emulateNetworkConditions', {
-      //     offline: false,
-      //     latency: 200, // ms
-      //     downloadThroughput: 780 * 1024 / 8, // 780 kb/s
-      //     uploadThroughput: 330 * 1024 / 8, // 330 kb/s
-      // });
       console.log("initBenchmark");
       let client = await page.context().newCDPSession(page);
       await client.send("Performance.enable");
@@ -193,7 +158,6 @@ async function runMemBenchmark(
       await runBenchmark(browser, page, benchmark, framework);
       await forceGC(page);
       await wait(40);
-      // let result = (await client.send('Performance.getMetrics')).metrics.filter((m) => m.name==='JSHeapUsedSize')[0].value / 1024 / 1024;
 
       let result = ((await page.evaluate("performance.measureUserAgentSpecificMemory()")) as any).bytes / 1024 / 1024;
       console.log("afterBenchmark ");
@@ -239,27 +203,4 @@ export async function executeBenchmark(
   return errorAndWarnings;
 }
 
-process.on("message", (msg: any) => {
-  config = msg.config;
-  console.log("START PLAYWRIGHT BENCHMARK.");
-  let {
-    framework,
-    benchmarkId,
-    benchmarkOptions,
-  }: {
-    framework: FrameworkData;
-    benchmarkId: string;
-    benchmarkOptions: BenchmarkOptions;
-  } = msg;
-  executeBenchmark(framework, benchmarkId, benchmarkOptions)
-    .then((result) => {
-      console.log("* success", result);
-      process.send!(result);
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.log("CATCH: Error in forkedBenchmarkRunner", error);
-      process.send!({ error: convertError(error) });
-      process.exit(0);
-    });
-});
+startForkedRunner("forkedBenchmarkRunnerPlaywright", executeBenchmark);
